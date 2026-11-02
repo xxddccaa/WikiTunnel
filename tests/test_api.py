@@ -1,0 +1,375 @@
+from __future__ import annotations
+
+import subprocess
+
+import pytest
+from fastapi.testclient import TestClient
+
+from backend.app.config import Settings
+from backend.app.diagnostics import CommandResult, DiagnosticSnapshot
+from backend.app.main import create_app
+from backend.app.models import Tunnel
+from backend.app.processes import (
+    ProcessRecord,
+    marker_for,
+    process_signature,
+    save_record,
+)
+from backend.app.schemas import CheckResult, RemoteListener
+
+
+def tunnel_payload(**overrides):
+    payload = {
+        "name": "测试隧道",
+        "ssh_target": "root@remote.example.com",
+        "ssh_port": None,
+        "remote_bind_host": "127.0.0.1",
+        "remote_port": 16001,
+        "target_host": "postgres.example.com.example",
+        "target_port": 5432,
+        "identity_file": None,
+        "server_alive_interval": 30,
+        "server_alive_count_max": 3,
+        "connect_timeout": 10,
+        "auto_reconnect": True,
+        "auto_start": False,
+    }
+    payload.update(overrides)
+    return payload
+
+
+def checks(*, dns="ok", target="ok", ssh="ok", auth="ok", listener="ok", e2e="unknown"):
+    return [
+        CheckResult(key="autossh", label="autossh", state="ok", detail="/opt/homebrew/bin/autossh"),
+        CheckResult(key="dns", label="DNS", state=dns, detail="192.0.2.22"),
+        CheckResult(key="target_tcp", label="目标端口", state=target, detail="target"),
+        CheckResult(key="ssh_tcp", label="SSH 端口", state=ssh, detail="ssh"),
+        CheckResult(
+            key="ssh_auth",
+            label="SSH 认证",
+            state=auth,
+            detail="Permission denied (publickey)",
+        ),
+        CheckResult(key="remote_listener", label="远端监听", state=listener, detail="listener"),
+        CheckResult(key="end_to_end", label="端到端", state=e2e, detail="e2e"),
+    ]
+
+
+def test_tunnel_crud_duplicate_and_uniqueness(client: TestClient):
+    initial = client.get("/api/tunnels")
+    assert initial.status_code == 200
+    assert len(initial.json()) == 1
+
+    created = client.post("/api/tunnels", json=tunnel_payload())
+    assert created.status_code == 201, created.text
+    created_body = created.json()
+    tunnel_id = created_body["tunnel"]["id"]
+    assert created_body["runtime"]["state"] == "stopped"
+
+    conflicting = client.post("/api/tunnels", json=tunnel_payload(name="重复端口"))
+    assert conflicting.status_code == 409
+
+    patched = client.patch(
+        f"/api/tunnels/{tunnel_id}",
+        json={"name": "已编辑隧道", "server_alive_interval": 45},
+    )
+    assert patched.status_code == 200, patched.text
+    assert patched.json()["tunnel"]["name"] == "已编辑隧道"
+    assert patched.json()["tunnel"]["server_alive_interval"] == 45
+
+    duplicated = client.post(f"/api/tunnels/{tunnel_id}/duplicate")
+    assert duplicated.status_code == 201, duplicated.text
+    duplicate_body = duplicated.json()["tunnel"]
+    assert duplicate_body["id"] != tunnel_id
+    assert duplicate_body["remote_port"] != 16001
+    assert duplicate_body["auto_start"] is False
+
+    deleted = client.delete(f"/api/tunnels/{tunnel_id}")
+    assert deleted.status_code == 204
+    assert client.get(f"/api/tunnels/{tunnel_id}").status_code == 404
+
+
+def test_invalid_tunnel_input_is_rejected(client: TestClient):
+    response = client.post("/api/tunnels", json=tunnel_payload(remote_port=70000))
+    assert response.status_code == 422
+    response = client.post("/api/tunnels", json=tunnel_payload(ssh_target="-oProxyCommand=bad"))
+    assert response.status_code == 422
+    response = client.post(
+        "/api/tunnels",
+        json=tunnel_payload(password="must-not-be-stored"),
+    )
+    assert response.status_code == 422
+
+
+def test_mutating_api_requires_local_session_token(test_settings: Settings):
+    secure_settings = Settings(
+        data_dir=test_settings.data_dir,
+        frontend_dist=test_settings.frontend_dist,
+        instance_lock=False,
+        strict_security=True,
+        monitor_interval=3600,
+    )
+    app = create_app(secure_settings)
+    with TestClient(app, base_url="http://127.0.0.1:8765") as secure_client:
+        session = secure_client.get("/api/session")
+        assert session.status_code == 200
+        token = session.json()["token"]
+        rejected = secure_client.post(
+            "/api/tunnels",
+            json=tunnel_payload(remote_port=16010),
+        )
+        assert rejected.status_code == 403
+        accepted = secure_client.post(
+            "/api/tunnels",
+            json=tunnel_payload(remote_port=16010),
+            headers={"X-WikiTunnel-Token": token},
+        )
+        assert accepted.status_code == 201, accepted.text
+        foreign_origin = secure_client.get(
+            "/api/tunnels",
+            headers={"Origin": "https://evil.example"},
+        )
+        assert foreign_origin.status_code == 403
+
+
+@pytest.mark.parametrize(
+    "scenario", ["healthy", "dns", "target", "auth", "conflict", "unknown_probe"]
+)
+def test_start_preflight_states(client: TestClient, monkeypatch, scenario: str):
+    app = client.app
+    supervisor = app.state.supervisor
+    tunnel_id = client.get("/api/tunnels").json()[0]["tunnel"]["id"]
+
+    async def fake_run(_tunnel):
+        if scenario == "healthy":
+            listener = RemoteListener(
+                found=True,
+                address="127.0.0.1",
+                port=15432,
+                pids=[123],
+                processes=[],
+                raw="LISTEN 127.0.0.1:15432 users:((\"sshd\",pid=123,fd=3))",
+            )
+            return DiagnosticSnapshot(
+                checks=checks(listener="warn", e2e="ok"),
+                remote_listener=listener,
+                end_to_end_ok=True,
+                end_to_end_known=True,
+                autossh_path="/opt/homebrew/bin/autossh",
+                network_ok=True,
+                ssh_auth_ok=True,
+            )
+        if scenario == "target":
+            return DiagnosticSnapshot(
+                checks=checks(target="fail", ssh="unknown", auth="unknown", listener="unknown", e2e="unknown"),
+                autossh_path="/opt/homebrew/bin/autossh",
+                network_ok=False,
+                error="目标不可达",
+            )
+        if scenario == "dns":
+            return DiagnosticSnapshot(
+                checks=checks(
+                    dns="fail",
+                    target="unknown",
+                    ssh="unknown",
+                    auth="unknown",
+                    listener="unknown",
+                    e2e="unknown",
+                ),
+                autossh_path="/opt/homebrew/bin/autossh",
+                network_ok=False,
+                error="DNS 解析失败",
+            )
+        if scenario == "auth":
+            return DiagnosticSnapshot(
+                checks=checks(auth="fail", listener="unknown", e2e="unknown"),
+                autossh_path="/opt/homebrew/bin/autossh",
+                network_ok=True,
+                ssh_auth_ok=False,
+                error="SSH 认证失败",
+            )
+        if scenario == "unknown_probe":
+            listener = RemoteListener(
+                found=True,
+                address="127.0.0.1",
+                port=15432,
+                pids=[456],
+                processes=[],
+                raw="LISTEN 127.0.0.1:15432 users:((\"sshd\",pid=456,fd=3))",
+            )
+            return DiagnosticSnapshot(
+                checks=checks(listener="warn", e2e="unknown"),
+                remote_listener=listener,
+                end_to_end_ok=False,
+                end_to_end_known=False,
+                autossh_path="/opt/homebrew/bin/autossh",
+                network_ok=True,
+                ssh_auth_ok=True,
+                error="无法执行端到端探测",
+            )
+        listener = RemoteListener(
+            found=True,
+            address="127.0.0.1",
+            port=15432,
+            pids=[456],
+            processes=[
+                {
+                    "pid": 456,
+                    "ppid": 1,
+                    "user": "root",
+                    "comm": "sshd",
+                    "args": "sshd: root@notty",
+                    "is_sshd": True,
+                }
+            ],
+            raw="LISTEN 127.0.0.1:15432 users:((\"sshd\",pid=456,fd=3))",
+        )
+        return DiagnosticSnapshot(
+            checks=checks(listener="warn", e2e="fail"),
+            remote_listener=listener,
+            end_to_end_ok=False,
+            end_to_end_known=True,
+            autossh_path="/opt/homebrew/bin/autossh",
+            network_ok=True,
+            ssh_auth_ok=True,
+            error="远端端口冲突",
+        )
+
+    monkeypatch.setattr(supervisor.diagnostics, "run", fake_run)
+    response = client.post(f"/api/tunnels/{tunnel_id}/start")
+    assert response.status_code == 200, response.text
+    body = response.json()
+    runtime = body["runtime"]
+    if scenario == "healthy":
+        assert body["started"] is False
+        assert runtime["state"] == "connected"
+        assert runtime["external_tunnel"] is True
+        assert runtime["managed"] is False
+    elif scenario in {"dns", "target"}:
+        assert runtime["state"] == "target_unreachable"
+        assert runtime["next_retry_at"] is not None
+    elif scenario == "auth":
+        assert runtime["state"] == "error"
+        assert "Permission denied" in runtime["last_error"]
+    elif scenario == "conflict":
+        assert runtime["state"] == "port_conflict"
+        assert body["started"] is False
+    else:
+        assert runtime["state"] == "error"
+        assert "无法执行端到端探测" in runtime["last_error"]
+
+
+def test_conflict_preview_and_clean_require_exact_confirmation(
+    client: TestClient, monkeypatch
+):
+    app = client.app
+    supervisor = app.state.supervisor
+    tunnel_id = client.get("/api/tunnels").json()[0]["tunnel"]["id"]
+    listener = RemoteListener(
+        found=True,
+        address="127.0.0.1",
+        port=15432,
+        pids=[987],
+        processes=[
+            {
+                "pid": 987,
+                "ppid": 1,
+                "user": "root",
+                "comm": "sshd",
+                "args": "sshd: root@notty",
+                "is_sshd": True,
+            }
+        ],
+        raw="LISTEN 127.0.0.1:15432 users:((\"sshd\",pid=987,fd=3))",
+    )
+
+    async def fake_listener(_tunnel):
+        return listener, None
+
+    async def fake_e2e(_tunnel):
+        return False, "nc timeout"
+
+    captured_commands: list[str] = []
+
+    async def fake_remote(_tunnel, command, timeout=12):
+        captured_commands.append(command)
+        return CommandResult(0, "", "")
+
+    monkeypatch.setattr(supervisor.diagnostics, "remote_listener", fake_listener)
+    monkeypatch.setattr(supervisor.diagnostics, "end_to_end", fake_e2e)
+    monkeypatch.setattr(supervisor.diagnostics, "run_remote", fake_remote)
+
+    preview_response = client.post(f"/api/tunnels/{tunnel_id}/conflict/preview")
+    assert preview_response.status_code == 200, preview_response.text
+    preview = preview_response.json()
+    assert preview["can_clean"] is True
+    assert preview["remote_listener"]["pids"] == [987]
+    assert "kill -TERM 987" in preview["manual_command"]
+
+    rejected = client.post(
+        f"/api/tunnels/{tunnel_id}/conflict/clean",
+        json={"fingerprint": preview["fingerprint"], "confirm": False},
+    )
+    assert rejected.status_code == 409
+    assert captured_commands == []
+
+    cleaned = client.post(
+        f"/api/tunnels/{tunnel_id}/conflict/clean",
+        json={"fingerprint": preview["fingerprint"], "confirm": True},
+    )
+    assert cleaned.status_code == 200, cleaned.text
+    assert captured_commands
+    command = captured_commands[0]
+    assert 'pid=987' in command
+    assert 'port=15432' in command
+    assert 'kill -TERM "$pid"' in command
+    assert "pkill" not in command
+    assert "killall" not in command
+
+
+def test_existing_managed_process_is_adopted_after_app_restart(test_settings: Settings):
+    app = create_app(test_settings)
+    with app.state.database.session() as session:
+        tunnel_id = session.query(Tunnel).first().id
+    executable = test_settings.data_dir / "autossh"
+    executable.symlink_to("/bin/sh")
+    marker = marker_for(tunnel_id)
+    process = subprocess.Popen(
+        [str(executable), "-c", "read ignored", marker],
+        stdin=subprocess.PIPE,
+        start_new_session=True,
+    )
+    signature = process_signature(process.pid)
+    assert signature
+    save_record(
+        test_settings.records_dir,
+        ProcessRecord(
+            tunnel_id=tunnel_id,
+            autossh_pid=process.pid,
+            pgid=process.pid,
+            started_at="2026-11-02T00:00:00+00:00",
+            process_signature=signature,
+            args_hash="adopted",
+            autossh_path=str(executable),
+            marker=marker,
+            log_offset=0,
+        ),
+    )
+    try:
+        with TestClient(app) as restart_client:
+            status = restart_client.get("/api/tunnels").json()[0]
+            assert status["runtime"]["managed"] is True
+            assert status["runtime"]["autossh_pid"] == process.pid
+            duplicate = restart_client.post(f"/api/tunnels/{tunnel_id}/start")
+            assert duplicate.status_code == 200
+            assert duplicate.json()["started"] is False
+            assert duplicate.json()["runtime"]["autossh_pid"] == process.pid
+    finally:
+        if process.stdin is not None:
+            process.stdin.close()
+        try:
+            process.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=2)
+
