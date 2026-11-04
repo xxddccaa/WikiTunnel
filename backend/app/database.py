@@ -38,6 +38,12 @@ class Database:
             bind=self.engine, expire_on_commit=False, class_=Session
         )
         Base.metadata.create_all(self.engine)
+        with self.engine.begin() as connection:
+            columns = connection.exec_driver_sql("PRAGMA table_info(tunnels)").all()
+            if not any(column[1] == "manually_stopped" for column in columns):
+                connection.exec_driver_sql(
+                    "ALTER TABLE tunnels ADD COLUMN manually_stopped BOOLEAN NOT NULL DEFAULT 0"
+                )
         if path.exists():
             os.chmod(path, 0o600)
         with self.session_factory() as session:

@@ -313,13 +313,13 @@ export function TunnelFormDialog({ open, tunnel, onOpenChange, onSubmit }: Props
                 checked={form.auto_reconnect}
                 onCheckedChange={(value) => update("auto_reconnect", value)}
                 label="自动重连"
-                description="指数退避，网络恢复后提前诊断"
+                description="VPN 网络可达时自动连接，断线后重试"
               />
               <FormSwitch
                 checked={form.auto_start}
                 onCheckedChange={(value) => update("auto_start", value)}
                 label="随应用启动"
-                description="WikiTunnel 启动时尝试连接"
+                description="打开 WikiTunnel 时立即尝试连接"
               />
             </div>
           </section>

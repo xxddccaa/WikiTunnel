@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import subprocess
+from dataclasses import replace
+from threading import Event
 
 import pytest
 from fastapi.testclient import TestClient
 
 from backend.app.config import Settings
+from backend.app.database import Database
 from backend.app.diagnostics import CommandResult, DiagnosticSnapshot
 from backend.app.main import create_app
 from backend.app.models import Tunnel
@@ -83,6 +86,8 @@ def test_tunnel_crud_duplicate_and_uniqueness(client: TestClient):
     assert duplicate_body["id"] != tunnel_id
     assert duplicate_body["remote_port"] != 16001
     assert duplicate_body["auto_start"] is False
+    with client.app.state.database.session() as session:
+        assert session.get(Tunnel, duplicate_body["id"]).manually_stopped is True
 
     deleted = client.delete(f"/api/tunnels/{tunnel_id}")
     assert deleted.status_code == 204
@@ -372,4 +377,171 @@ def test_existing_managed_process_is_adopted_after_app_restart(test_settings: Se
         except subprocess.TimeoutExpired:
             process.kill()
             process.wait(timeout=2)
+
+
+@pytest.mark.parametrize("diagnosed_offline", [False, True])
+def test_idle_tunnel_starts_autossh_when_vpn_recovers(
+    client: TestClient, monkeypatch, diagnosed_offline: bool
+):
+    supervisor = client.app.state.supervisor
+    tunnel_id = client.get("/api/tunnels").json()[0]["tunnel"]["id"]
+    network_available = False
+    spawned: list[str] = []
+
+    async def fake_network(_tunnel):
+        return network_available
+
+    async def fake_run(_tunnel):
+        if not network_available:
+            return DiagnosticSnapshot(
+                checks=checks(target="fail"),
+                autossh_path="/opt/homebrew/bin/autossh",
+                error="目标数据库不可达",
+            )
+        return DiagnosticSnapshot(
+            checks=checks(),
+            autossh_path="/opt/homebrew/bin/autossh",
+            network_ok=True,
+            ssh_auth_ok=True,
+        )
+
+    async def fake_spawn(tunnel, _autossh_path):
+        spawned.append(tunnel.id)
+        return ProcessRecord(
+            tunnel_id=tunnel.id,
+            autossh_pid=12345,
+            pgid=12345,
+            started_at="2026-11-04T00:00:00+00:00",
+            process_signature="test",
+            args_hash="test",
+            autossh_path="/opt/homebrew/bin/autossh",
+            marker=marker_for(tunnel.id),
+        )
+
+    monkeypatch.setattr(supervisor.diagnostics, "quick_network_ok", fake_network)
+    monkeypatch.setattr(supervisor.diagnostics, "run", fake_run)
+    monkeypatch.setattr(supervisor, "_spawn_autossh", fake_spawn)
+    monkeypatch.setattr("backend.app.supervisor.find_ssh_pid", lambda _record: None)
+
+    if diagnosed_offline:
+        assert client.post(f"/api/tunnels/{tunnel_id}/test").json()["runtime"]["state"] == "target_unreachable"
+    else:
+        assert client.get(f"/api/tunnels/{tunnel_id}").json()["runtime"]["state"] == "stopped"
+    client.portal.call(supervisor._monitor_idle, tunnel_id)
+    assert spawned == []
+
+    network_available = True
+    client.portal.call(supervisor._monitor_idle, tunnel_id)
+    runtime = client.get(f"/api/tunnels/{tunnel_id}").json()["runtime"]
+    assert spawned == [tunnel_id]
+    assert runtime["managed"] is True
+    assert runtime["state"] == "starting"
+
+    client.portal.call(supervisor._monitor_idle, tunnel_id)
+    assert spawned == [tunnel_id]
+
+
+def test_background_monitor_auto_connects_without_click(test_settings: Settings, monkeypatch):
+    settings = replace(test_settings, monitor_interval=0.02)
+    app = create_app(settings)
+    network_available = Event()
+    connected = Event()
+
+    async def fake_network(_tunnel):
+        return network_available.is_set()
+
+    async def fake_run(_tunnel):
+        return DiagnosticSnapshot(
+            checks=checks(listener="warn", e2e="ok"),
+            remote_listener=RemoteListener(found=True),
+            autossh_path="/opt/homebrew/bin/autossh",
+            network_ok=True,
+            ssh_auth_ok=True,
+            end_to_end_known=True,
+            end_to_end_ok=True,
+        )
+
+    original_publish = app.state.broker.publish
+
+    def publish(event):
+        original_publish(event)
+        if event.get("runtime", {}).get("state") == "connected":
+            connected.set()
+
+    monkeypatch.setattr(app.state.diagnostics, "quick_network_ok", fake_network)
+    monkeypatch.setattr(app.state.diagnostics, "run", fake_run)
+    monkeypatch.setattr(app.state.broker, "publish", publish)
+
+    with TestClient(app) as client:
+        tunnel_id = client.get("/api/tunnels").json()[0]["tunnel"]["id"]
+        assert client.get(f"/api/tunnels/{tunnel_id}").json()["runtime"]["state"] == "stopped"
+        network_available.set()
+        assert connected.wait(2), "VPN 可达后后台监控未自动连接隧道"
+        assert client.get(f"/api/tunnels/{tunnel_id}").json()["runtime"]["state"] == "connected"
+
+
+def test_manual_stop_prevents_auto_connection_after_app_restart(test_settings: Settings, monkeypatch):
+    app = create_app(test_settings)
+    with TestClient(app) as client:
+        tunnel_id = client.get("/api/tunnels").json()[0]["tunnel"]["id"]
+        response = client.post(f"/api/tunnels/{tunnel_id}/stop")
+        assert response.json()["state"] == "stopped"
+
+    restarted = create_app(test_settings)
+
+    async def unexpected_network_check(_tunnel):
+        raise AssertionError("手动停止后不应探测网络")
+
+    monkeypatch.setattr(restarted.state.diagnostics, "quick_network_ok", unexpected_network_check)
+    with TestClient(restarted) as client:
+        client.portal.call(restarted.state.supervisor._monitor_idle, tunnel_id)
+        assert client.get(f"/api/tunnels/{tunnel_id}").json()["runtime"]["state"] == "stopped"
+
+        async def healthy_external(_tunnel):
+            return DiagnosticSnapshot(
+                checks=checks(listener="warn", e2e="ok"),
+                remote_listener=RemoteListener(found=True),
+                autossh_path="/opt/homebrew/bin/autossh",
+                network_ok=True,
+                ssh_auth_ok=True,
+                end_to_end_known=True,
+                end_to_end_ok=True,
+            )
+
+        monkeypatch.setattr(restarted.state.diagnostics, "run", healthy_external)
+        started = client.post(f"/api/tunnels/{tunnel_id}/start")
+        assert started.json()["runtime"]["state"] == "connected"
+        with restarted.state.database.session() as session:
+            assert session.get(Tunnel, tunnel_id).manually_stopped is False
+
+
+def test_disabled_auto_reconnect_does_not_start_idle_tunnel(client: TestClient, monkeypatch):
+    tunnel_id = client.get("/api/tunnels").json()[0]["tunnel"]["id"]
+    response = client.patch(f"/api/tunnels/{tunnel_id}", json={"auto_reconnect": False})
+    assert response.status_code == 200
+
+    async def unexpected_network_check(_tunnel):
+        raise AssertionError("关闭自动重连后不应探测网络")
+
+    supervisor = client.app.state.supervisor
+    monkeypatch.setattr(supervisor.diagnostics, "quick_network_ok", unexpected_network_check)
+    client.portal.call(supervisor._monitor_idle, tunnel_id)
+    assert client.get(f"/api/tunnels/{tunnel_id}").json()["runtime"]["state"] == "stopped"
+
+
+def test_existing_database_adds_manual_stop_state(test_settings: Settings):
+    existing = Database(test_settings.database_path)
+    with existing.session() as session:
+        existing_id = session.query(Tunnel).first().id
+    with existing.engine.begin() as connection:
+        connection.exec_driver_sql("ALTER TABLE tunnels DROP COLUMN manually_stopped")
+    existing.engine.dispose()
+
+    migrated = Database(test_settings.database_path)
+    with migrated.session() as session:
+        tunnel = session.query(Tunnel).first()
+        assert tunnel is not None
+        assert tunnel.id == existing_id
+        assert tunnel.manually_stopped is False
+    migrated.engine.dispose()
 

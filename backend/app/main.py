@@ -242,7 +242,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             values["remote_port"] = port
             values["auto_start"] = False
             ensure_unique(session, values)
-            tunnel = Tunnel(**values)
+            tunnel = Tunnel(**values, manually_stopped=True)
             session.add(tunnel)
             session.commit()
             session.refresh(tunnel)

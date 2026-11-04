@@ -44,6 +44,7 @@ class Tunnel(Base):
     connect_timeout: Mapped[int] = mapped_column(Integer, default=10)
     auto_reconnect: Mapped[bool] = mapped_column(Boolean, default=True)
     auto_start: Mapped[bool] = mapped_column(Boolean, default=False)
+    manually_stopped: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, onupdate=utc_now

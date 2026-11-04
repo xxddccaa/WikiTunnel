@@ -117,6 +117,15 @@ class TunnelSupervisor:
                 session.expunge(tunnel)
             return tunnels
 
+    def _set_manually_stopped(self, tunnel_id: str, stopped: bool) -> None:
+        with self.database.session() as session:
+            tunnel = session.get(Tunnel, tunnel_id)
+            if tunnel is None:
+                raise SupervisorError("隧道不存在")
+            if tunnel.manually_stopped != stopped:
+                tunnel.manually_stopped = stopped
+                session.commit()
+
     def _status(self, tunnel: Tunnel) -> TunnelStatus:
         return TunnelStatus(
             tunnel=TunnelRead.model_validate(tunnel),
@@ -228,12 +237,16 @@ class TunnelSupervisor:
             elif record is not None:
                 delete_record(self.settings.records_dir, tunnel.id)
                 runtime.activity = "发现失效的 PID 记录，已清除"
+            if tunnel.manually_stopped and not tunnel.auto_start:
+                runtime.activity = "自动连接已暂停，点击启动恢复"
             self._publish_runtime(tunnel.id)
         self._network_fingerprint = await asyncio.to_thread(self._read_network_path)
         self._monitor_task = asyncio.create_task(self._monitor_loop())
         for tunnel in self.list_tunnels():
-            if tunnel.auto_start and tunnel.id not in self._records:
-                asyncio.create_task(self._auto_start(tunnel.id))
+            if tunnel.auto_start:
+                self._set_manually_stopped(tunnel.id, False)
+                if tunnel.id not in self._records:
+                    asyncio.create_task(self._auto_start(tunnel.id))
 
     async def _auto_start(self, tunnel_id: str) -> None:
         try:
@@ -256,9 +269,17 @@ class TunnelSupervisor:
             await asyncio.gather(*tasks, return_exceptions=True)
 
     async def start_tunnel(self, tunnel_id: str, manual: bool = True) -> StartResponse:
-        tunnel = self._get_tunnel(tunnel_id)
         async with self._lock(tunnel_id):
+            tunnel = self._get_tunnel(tunnel_id)
             runtime = self._runtime(tunnel_id)
+            if not manual and tunnel.manually_stopped:
+                return StartResponse(
+                    started=False,
+                    message="隧道已手动停止，请点击启动恢复自动连接",
+                    runtime=runtime.model_copy(deep=True),
+                )
+            if manual:
+                self._set_manually_stopped(tunnel_id, False)
             record = self._records.get(tunnel_id)
             if record is not None and verify_record(record):
                 self._process_fields(runtime, record)
@@ -656,6 +677,7 @@ class TunnelSupervisor:
     async def stop_tunnel(self, tunnel_id: str, state_if_no_process: str = "stopped") -> RuntimeView:
         self._get_tunnel(tunnel_id)
         async with self._lock(tunnel_id):
+            self._set_manually_stopped(tunnel_id, True)
             runtime = self._runtime(tunnel_id)
             record = self._records.get(tunnel_id)
             self._stopping.add(tunnel_id)
@@ -665,14 +687,16 @@ class TunnelSupervisor:
                 self._active.discard(tunnel_id)
                 runtime.next_retry_at = None
                 if ok:
-                    self._transition(runtime, "stopped", activity="隧道已停止")
+                    runtime.last_error = None
+                    self._transition(runtime, "stopped", activity="已手动停止，自动连接已暂停")
                 else:
                     self._transition(runtime, "error", error=message, activity="停止失败")
             else:
                 self._active.discard(tunnel_id)
                 runtime.next_retry_at = None
                 runtime.external_tunnel = False
-                self._transition(runtime, state_if_no_process, activity="未发现本应用管理的进程")
+                runtime.last_error = None
+                self._transition(runtime, state_if_no_process, activity="已手动停止，自动连接已暂停")
             self._stopping.discard(tunnel_id)
             self._stop_tail(tunnel_id)
             return runtime.model_copy(deep=True)
@@ -906,8 +930,32 @@ class TunnelSupervisor:
                         )
                     except (SupervisorError, OSError):
                         continue
+                await asyncio.gather(
+                    *(self._monitor_idle(tunnel.id) for tunnel in self.list_tunnels()),
+                    return_exceptions=True,
+                )
         except asyncio.CancelledError:
             return
+
+    async def _monitor_idle(self, tunnel_id: str) -> None:
+        tunnel = self._get_tunnel(tunnel_id)
+        if not self._idle_can_connect(tunnel):
+            return
+        if not await self.diagnostics.quick_network_ok(tunnel):
+            return
+        async with self._lock(tunnel_id):
+            tunnel = self._get_tunnel(tunnel_id)
+            if not self._shutdown and self._idle_can_connect(tunnel):
+                await self._attempt_start(tunnel)
+
+    def _idle_can_connect(self, tunnel: Tunnel) -> bool:
+        return (
+            tunnel.auto_reconnect
+            and not tunnel.manually_stopped
+            and tunnel.id not in self._active
+            and self._runtime(tunnel.id).state
+            in {"stopped", "target_unreachable", "ssh_unreachable"}
+        )
 
     async def _monitor_tunnel(self, tunnel_id: str, *, force: bool) -> None:
         async with self._lock(tunnel_id):
