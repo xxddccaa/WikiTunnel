@@ -1,6 +1,6 @@
-# WikiTunnel
+# AutoSSH Desk
 
-WikiTunnel 是一个在本机运行的 macOS 反向 SSH 隧道管理器，用 FastAPI + React Web UI 管理多个 autossh 隧道。默认配置对应：
+AutoSSH Desk 是一个在本机运行的 macOS autossh 隧道管理器，用 FastAPI + React Web UI 管理多个反向 SSH 隧道。默认配置对应：
 
 ```text
 Mac → autossh/ssh → 远端主机（127.0.0.1:15432）→ 目标 PostgreSQL（5432）
@@ -8,7 +8,7 @@ Mac → autossh/ssh → 远端主机（127.0.0.1:15432）→ 目标 PostgreSQL�
 
 它直接调用 `/usr/bin/ssh` 和 Homebrew 安装的 `autossh`。认证由现有 SSH Agent、Keychain 或 `~/.ssh/config` 完成，应用不会要求输入或保存 SSH 密码、私钥内容、数据库密码。仓库中的主机名、域名、IP 和进程号均为脱敏示例。
 
-![WikiTunnel 界面预览（示例数据）](docs/images/wikitunnel-connected.png)
+![AutoSSH Desk 界面预览（示例数据）](docs/images/autossh-desk.png)
 
 ## 功能
 
@@ -17,7 +17,7 @@ Mac → autossh/ssh → 远端主机（127.0.0.1:15432）→ 目标 PostgreSQL�
 - 启动前顺序检查 autossh、DNS、目标数据库 5432、远端 SSH 22、SSH 认证和远端监听端口
 - 已有健康隧道时拒绝启动第二个 autossh
 - 识别远端 `remote port forwarding failed`，暂停密集重试
-- 只终止带 WikiTunnel marker 的本应用进程
+- 只终止带本应用 marker 的受管进程
 - 远端端口冲突先展示精确 PID、进程名和命令行，再进行二次确认
 - 实时状态/日志、网络恢复后自动连接与指数退避重连、睡眠唤醒和网络路径变化后重新诊断
 - 应用重启后重新识别仍由本应用启动的 autossh
@@ -43,12 +43,12 @@ autossh -V
 brew install autossh
 ```
 
-WikiTunnel 不会自动安装 autossh，也不会修改 OpenVPN 配置或 `/etc/resolver`。
+AutoSSH Desk 不会自动安装 autossh，也不会修改 OpenVPN 配置或 `/etc/resolver`。
 
 ## 首次安装
 
 ```bash
-cd ~/Developer/WikiTunnel
+# 在项目目录中
 ./setup.sh
 ```
 
@@ -63,7 +63,7 @@ cd ~/Developer/WikiTunnel
 默认监听 `http://127.0.0.1:8765` 并自动打开浏览器。如果希望手动打开：
 
 ```bash
-WIKITUNNEL_NO_BROWSER=1 ./run.sh
+AUTOSSH_DESK_NO_BROWSER=1 ./run.sh
 ```
 
 ## SSH 配置
@@ -87,7 +87,7 @@ Host remote-host
 ssh-add --apple-use-keychain ~/.ssh/id_ed25519
 ```
 
-WikiTunnel 的诊断命令使用 `BatchMode=yes`，不会弹出密码输入框，也不会把认证内容写入配置或日志。
+AutoSSH Desk 的诊断命令使用 `BatchMode=yes`，不会弹出密码输入框，也不会把认证内容写入配置或日志。
 
 ## 使用
 
@@ -98,19 +98,21 @@ WikiTunnel 的诊断命令使用 `BatchMode=yes`，不会弹出密码输入框�
 5. 若显示“远端端口冲突”，点击“清理端口”查看远端监听详情；只有唯一 `sshd` 进程可被确认时按钮才可用。
 6. “连接参数”复制 DBeaver 主机端口信息和一条本地 SSH 转发命令；“诊断”复制状态与脱敏日志。
 
-启用“自动重连”后，只要 WikiTunnel 保持运行，即使隧道目前显示“未启动”，应用也会定期检查目标数据库和远端 SSH 是否可达。手动恢复 OpenVPN 后，网络通畅时会自动执行启动检查并建立 autossh 隧道，无需点击“启动”；无法连接时继续等待网络恢复。“随应用启动”会在打开 WikiTunnel 时立即尝试连接，即使当时 VPN 尚不可达。手动点击“停止”会暂停该隧道的自动连接，直到再次点击“启动”；如果启用了“随应用启动”，下次打开 WikiTunnel 时仍会尝试连接。复制出的隧道保持未启动，首次点击“启动”后才会开始自动重连。SSH 认证失败或远端端口冲突时会暂停重试，等待人工处理。
+启用“自动重连”后，只要 AutoSSH Desk 保持运行，即使隧道目前显示“未启动”，应用也会定期检查目标数据库和远端 SSH 是否可达。手动恢复 OpenVPN 后，网络通畅时会自动执行启动检查并建立 autossh 隧道，无需点击“启动”；无法连接时继续等待网络恢复。“随应用启动”会在打开 AutoSSH Desk 时立即尝试连接，即使当时 VPN 尚不可达。手动点击“停止”会暂停该隧道的自动连接，直到再次点击“启动”；如果启用了“随应用启动”，下次打开 AutoSSH Desk 时仍会尝试连接。复制出的隧道保持未启动，首次点击“启动”后才会开始自动重连。SSH 认证失败或远端端口冲突时会暂停重试，等待人工处理。
 
 运行中的隧道必须先停止才能编辑或删除配置。应用退出时不会自动停止运行中的 autossh，重新打开后可以重新接管；需要停止时只使用界面中的“停止”。
 
 ## 数据与权限
 
 ```text
-~/Library/Application Support/WikiTunnel/
-├── wikitunnel.sqlite3
+~/Library/Application Support/AutoSSH Desk/
+├── autossh-desk.sqlite3
 ├── instance.lock
 ├── records/<tunnel-id>.json
 └── logs/<tunnel-id>.log
 ```
+
+从 WikiTunnel 升级时会继续使用旧的 `~/Library/Application Support/WikiTunnel/` 及 `wikitunnel.sqlite3`，不搬动已有数据库、日志或正在运行的 autossh。旧的 `WIKITUNNEL_*` 环境变量、会话 token 请求头和进程标记也继续兼容；新配置建议使用 `AUTOSSH_DESK_*`。
 
 配置目录权限为 `0700`，进程记录和日志文件权限为 `0600`。日志读取、实时推送和诊断复制会脱敏密码、Bearer token、secret 赋值和私钥块。
 
@@ -134,6 +136,6 @@ pnpm --dir frontend test:e2e
 ## 已知范围
 
 - 这是浏览器页面，不提供原生菜单栏图标。关闭浏览器不会停止后端；停止后端不会主动终止已运行的 autossh。
-- “随应用启动”表示打开 WikiTunnel 时启动隧道，不创建 macOS 登录 LaunchAgent。
+- “随应用启动”表示打开 AutoSSH Desk 时启动隧道，不创建 macOS 登录 LaunchAgent。
 - 状态通知使用浏览器 Notification API，可在页面右上角开启或关闭，只有页面保持打开时有效。
 

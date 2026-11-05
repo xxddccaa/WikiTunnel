@@ -17,7 +17,7 @@ from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconn
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from sqlalchemy import select
 
-from .config import Settings
+from .config import Settings, env_setting
 from .conflict import ConflictError
 from .database import Database
 from .diagnostics import Diagnostics
@@ -50,7 +50,7 @@ class InstanceLock:
             fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as exc:
             os.close(descriptor)
-            raise RuntimeError("WikiTunnel 已有实例运行") from exc
+            raise RuntimeError("AutoSSH Desk 已有实例运行") from exc
         os.ftruncate(descriptor, 0)
         os.write(descriptor, f"pid={os.getpid()}\n".encode())
         os.fsync(descriptor)
@@ -102,7 +102,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 lock.release()
 
     app = FastAPI(
-        title="WikiTunnel",
+        title="AutoSSH Desk",
         version="0.1.0",
         docs_url=None,
         redoc_url=None,
@@ -132,7 +132,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 and request.method not in {"GET", "HEAD", "OPTIONS"}
                 and request.url.path != "/api/session"
             ):
-                supplied = request.headers.get("x-wikitunnel-token", "")
+                supplied = request.headers.get(
+                    "x-autossh-desk-token", request.headers.get("x-wikitunnel-token", "")
+                )
                 if not secrets.compare_digest(supplied, api_token):
                     return JSONResponse({"detail": "无效的本地会话令牌"}, status_code=403)
             return await call_next(request)
@@ -406,8 +408,8 @@ def launch() -> None:
         raise SystemExit("前端尚未构建，请先执行 ./setup.sh")
     app = create_app(config)
     url = f"http://{config.host}:{config.port}"
-    if os.environ.get("WIKITUNNEL_NO_BROWSER", "").lower() not in {"1", "true", "yes"}:
+    if env_setting("NO_BROWSER", "").lower() not in {"1", "true", "yes"}:
         threading.Thread(target=_open_when_ready, args=(url,), daemon=True).start()
-    print(f"WikiTunnel: {url}")
+    print(f"AutoSSH Desk: {url}")
     uvicorn.run(app, host=config.host, port=config.port, log_level="info")
 

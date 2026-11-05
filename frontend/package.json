@@ -1,7 +1,7 @@
 {
-  "name": "wikitunnel-ui",
+  "name": "autossh-desk-ui",
   "version": "1.0.0",
-  "description": "WikiTunnel local reverse tunnel manager",
+  "description": "AutoSSH Desk local reverse tunnel manager",
   "private": true,
   "type": "module",
   "scripts": {

@@ -2,11 +2,11 @@ import { useEffect, useRef, useState } from "react";
 import {
   sessionToken,
   webSocketUrl,
-  type WikiEvent,
+  type TunnelEvent,
 } from "../lib/api";
 
 interface Options {
-  onEvent: (event: WikiEvent) => void;
+  onEvent: (event: TunnelEvent) => void;
   onConnected?: () => void;
 }
 
@@ -39,7 +39,7 @@ export function useLiveEvents({ onEvent, onConnected }: Options): boolean {
         };
         socket.onmessage = (message) => {
           try {
-            eventHandler.current(JSON.parse(message.data) as WikiEvent);
+            eventHandler.current(JSON.parse(message.data) as TunnelEvent);
           } catch {
             // Ignore malformed local events.
           }

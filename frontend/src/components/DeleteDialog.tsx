@@ -43,7 +43,7 @@ export function DeleteDialog({ open, onOpenChange, status, onConfirm }: Props) {
           </div>
           <p className="mt-1 text-[#9b5d5d]">
             {managed
-              ? "该隧道由 WikiTunnel 管理。请先返回页面停止隧道，再删除配置。"
+              ? "该隧道由 AutoSSH Desk 管理。请先返回页面停止隧道，再删除配置。"
               : "此操作不会终止远端其他会话，也不会删除远端端口。"}
           </p>
         </div>

@@ -127,9 +127,15 @@ def test_mutating_api_requires_local_session_token(test_settings: Settings):
         accepted = secure_client.post(
             "/api/tunnels",
             json=tunnel_payload(remote_port=16010),
-            headers={"X-WikiTunnel-Token": token},
+            headers={"X-AutoSSH-Desk-Token": token},
         )
         assert accepted.status_code == 201, accepted.text
+        legacy = secure_client.post(
+            "/api/tunnels",
+            json=tunnel_payload(remote_port=16011),
+            headers={"X-WikiTunnel-Token": token},
+        )
+        assert legacy.status_code == 201, legacy.text
         foreign_origin = secure_client.get(
             "/api/tunnels",
             headers={"Origin": "https://evil.example"},
@@ -332,13 +338,16 @@ def test_conflict_preview_and_clean_require_exact_confirmation(
     assert "killall" not in command
 
 
-def test_existing_managed_process_is_adopted_after_app_restart(test_settings: Settings):
+@pytest.mark.parametrize("legacy_marker", [False, True])
+def test_existing_managed_process_is_adopted_after_app_restart(
+    test_settings: Settings, legacy_marker: bool
+):
     app = create_app(test_settings)
     with app.state.database.session() as session:
         tunnel_id = session.query(Tunnel).first().id
     executable = test_settings.data_dir / "autossh"
     executable.symlink_to("/bin/sh")
-    marker = marker_for(tunnel_id)
+    marker = f"WIKITUNNEL_PROFILE={tunnel_id}" if legacy_marker else marker_for(tunnel_id)
     process = subprocess.Popen(
         [str(executable), "-c", "read ignored", marker],
         stdin=subprocess.PIPE,
@@ -544,4 +553,35 @@ def test_existing_database_adds_manual_stop_state(test_settings: Settings):
         assert tunnel.id == existing_id
         assert tunnel.manually_stopped is False
     migrated.engine.dispose()
+
+
+def test_data_dir_and_environment_preserve_existing_installation(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    for name in (
+        "AUTOSSH_DESK_DATA_DIR", "WIKITUNNEL_DATA_DIR",
+        "AUTOSSH_DESK_PORT", "WIKITUNNEL_PORT",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    support = tmp_path / "Library" / "Application Support"
+    new_data_dir = support / "AutoSSH Desk"
+    old_data_dir = support / "WikiTunnel"
+    settings = Settings.from_env()
+    assert settings.data_dir == new_data_dir
+    assert settings.database_path == new_data_dir / "autossh-desk.sqlite3"
+
+    old_data_dir.mkdir(parents=True)
+    (old_data_dir / "wikitunnel.sqlite3").touch()
+    settings = Settings.from_env()
+    assert settings.data_dir == old_data_dir
+    assert settings.database_path == old_data_dir / "wikitunnel.sqlite3"
+
+    monkeypatch.setenv("WIKITUNNEL_PORT", "8766")
+    assert Settings.from_env().port == 8766
+    monkeypatch.setenv("AUTOSSH_DESK_PORT", "8767")
+    assert Settings.from_env().port == 8767
+
+    new_data_dir.mkdir(parents=True)
+    (new_data_dir / "autossh-desk.sqlite3").touch()
+    assert Settings.from_env().data_dir == new_data_dir
 

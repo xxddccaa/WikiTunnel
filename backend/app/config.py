@@ -10,7 +10,20 @@ PROJECT_ROOT = PACKAGE_DIR.parents[1]
 
 
 def _default_data_dir() -> Path:
-    return Path.home() / "Library" / "Application Support" / "WikiTunnel"
+    support_dir = Path.home() / "Library" / "Application Support"
+    data_dir = support_dir / "AutoSSH Desk"
+    legacy_dir = support_dir / "WikiTunnel"
+    if (data_dir / "autossh-desk.sqlite3").exists():
+        return data_dir
+    if (legacy_dir / "wikitunnel.sqlite3").exists():
+        return legacy_dir
+    return data_dir
+
+
+def env_setting(name: str, default: str) -> str:
+    return os.environ.get(
+        f"AUTOSSH_DESK_{name}", os.environ.get(f"WIKITUNNEL_{name}", default)
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,23 +40,24 @@ class Settings:
     @classmethod
     def from_env(cls) -> "Settings":
         return cls(
-            data_dir=Path(os.environ.get("WIKITUNNEL_DATA_DIR", _default_data_dir())).expanduser(),
+            data_dir=Path(env_setting("DATA_DIR", str(_default_data_dir()))).expanduser(),
             frontend_dist=Path(
-                os.environ.get("WIKITUNNEL_FRONTEND_DIST", PROJECT_ROOT / "frontend" / "dist")
+                env_setting("FRONTEND_DIST", str(PROJECT_ROOT / "frontend" / "dist"))
             ).expanduser(),
-            host=os.environ.get("WIKITUNNEL_HOST", "127.0.0.1"),
-            port=int(os.environ.get("WIKITUNNEL_PORT", "8765")),
-            instance_lock=os.environ.get("WIKITUNNEL_DISABLE_INSTANCE_LOCK", "").lower()
+            host=env_setting("HOST", "127.0.0.1"),
+            port=int(env_setting("PORT", "8765")),
+            instance_lock=env_setting("DISABLE_INSTANCE_LOCK", "").lower()
             not in {"1", "true", "yes"},
-            strict_security=os.environ.get("WIKITUNNEL_DISABLE_SECURITY", "").lower()
+            strict_security=env_setting("DISABLE_SECURITY", "").lower()
             not in {"1", "true", "yes"},
-            monitor_interval=float(os.environ.get("WIKITUNNEL_MONITOR_INTERVAL", "8")),
-            ssh_executable=os.environ.get("WIKITUNNEL_SSH", "/usr/bin/ssh"),
+            monitor_interval=float(env_setting("MONITOR_INTERVAL", "8")),
+            ssh_executable=env_setting("SSH", "/usr/bin/ssh"),
         )
 
     @property
     def database_path(self) -> Path:
-        return self.data_dir / "wikitunnel.sqlite3"
+        legacy_path = self.data_dir / "wikitunnel.sqlite3"
+        return legacy_path if legacy_path.exists() else self.data_dir / "autossh-desk.sqlite3"
 
     @property
     def logs_dir(self) -> Path:

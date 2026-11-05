@@ -75,7 +75,7 @@ export function dbeaverText(tunnel: {
   return [
     `远端 DBeaver: 主机 127.0.0.1，端口 ${tunnel.remote_port}，类型 PostgreSQL`,
     "",
-    "Mac 端临时本地转发命令（不要同时运行 WikiTunnel 的同端口本地监听）：",
+    "Mac 端临时本地转发命令（不要同时运行 AutoSSH Desk 的同端口本地监听）：",
     `ssh -N -L ${tunnel.remote_port}:${tunnel.remote_bind_host}:${tunnel.remote_port}${sshPort}${identity} ${tunnel.ssh_target}`,
     "",
     "数据库账号和密码未包含在复制内容中。",

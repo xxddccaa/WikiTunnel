@@ -5,7 +5,7 @@ test("renders the tunnel manager and opens configuration", async ({ page }) => {
   page.on("pageerror", (error) => pageErrors.push(error.message));
 
   await page.goto("/");
-  await expect(page.getByText("WikiTunnel", { exact: true })).toBeVisible();
+  await expect(page.getByText("AutoSSH Desk", { exact: true })).toBeVisible();
   await expect(page.locator("h1").first()).toBeVisible();
   await expect(page.getByText("PostgreSQL Tunnel").first()).toBeVisible();
   await expect(page.getByText("完整链路检查")).toBeVisible();

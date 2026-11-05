@@ -8,7 +8,7 @@ import socket
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from .config import Settings
+from .config import Settings, env_setting
 from .models import Tunnel
 from .redaction import redact_text
 from .schemas import CheckResult, RemoteListener
@@ -107,7 +107,7 @@ class Diagnostics:
         self.settings = settings
 
     def find_autossh(self) -> str | None:
-        override = os.environ.get("WIKITUNNEL_AUTOSSH")
+        override = env_setting("AUTOSSH", "")
         if override:
             return override
         return shutil.which("autossh")
@@ -284,7 +284,7 @@ class Diagnostics:
             f"ss -H -ltnp 'sport = :{port}'; "
             f"elif command -v lsof >/dev/null 2>&1; then "
             f"lsof -nP -iTCP:{port} -sTCP:LISTEN || true; "
-            f"else echo WIKITUNNEL_NO_LISTENER_TOOL >&2; exit 127; fi"
+            f"else echo AUTOSSH_DESK_NO_LISTENER_TOOL >&2; exit 127; fi"
         )
         result = await self.run_remote(tunnel, remote_command, timeout=12)
         if not result.ok:
@@ -310,12 +310,12 @@ class Diagnostics:
             "fi; "
             "elif command -v python3 >/dev/null 2>&1; then "
             f"python3 -c 'import socket; s=socket.create_connection((\"{host}\", {port}), 3); s.close()'; "
-            "else echo WIKITUNNEL_NO_TCP_PROBE >&2; exit 127; fi"
+            "else echo AUTOSSH_DESK_NO_TCP_PROBE >&2; exit 127; fi"
         )
         result = await self.run_remote(tunnel, command, timeout=8)
         if result.ok:
             return True, f"远端 {connect_host}:{tunnel.remote_port} 可以建立 TCP 连接"
-        if result.code == 127 or "WIKITUNNEL_NO_TCP_PROBE" in result.stderr:
+        if result.code == 127 or "AUTOSSH_DESK_NO_TCP_PROBE" in result.stderr:
             return None, "远端缺少 nc、bash /dev/tcp 和 python3，无法执行端到端探测"
         return False, result.message
 

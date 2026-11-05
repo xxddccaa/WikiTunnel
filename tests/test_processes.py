@@ -80,7 +80,7 @@ def wait_exit(process: subprocess.Popen, timeout: float = 3) -> int:
 def test_autossh_args_include_marker_keepalive_and_defaults():
     tunnel = sample_tunnel("abc-123")
     args = build_autossh_args(tunnel, "/opt/homebrew/bin/autossh")
-    assert "SetEnv=WIKITUNNEL_PROFILE=abc-123" in args
+    assert "SetEnv=AUTOSSH_DESK_PROFILE=abc-123" in args
     assert "TCPKeepAlive=yes" in args
     assert "ExitOnForwardFailure=yes" in args
     assert "127.0.0.1:15432:postgres.example.com:5432" in args
@@ -213,7 +213,7 @@ def test_end_to_end_falls_back_when_nc_is_missing(tmp_path: Path):
 
     async def missing_probe(_tunnel, command, timeout=12):
         captured.append(command)
-        return CommandResult(127, "", "WIKITUNNEL_NO_TCP_PROBE")
+        return CommandResult(127, "", "AUTOSSH_DESK_NO_TCP_PROBE")
 
     diagnostics.run_remote = missing_probe  # type: ignore[method-assign]
     ok, detail = asyncio.run(diagnostics.end_to_end(sample_tunnel()))

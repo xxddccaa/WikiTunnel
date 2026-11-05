@@ -92,7 +92,7 @@ class ConflictService:
             )
         else:
             message = (
-                "无法安全确认唯一的 sshd 监听进程。WikiTunnel 不会自动终止，请使用手工命令核对。"
+                "无法安全确认唯一的 sshd 监听进程。AutoSSH Desk 不会自动终止，请使用手工命令核对。"
             )
         token = secrets.token_urlsafe(24)
         expires_at = datetime.now(timezone.utc) + timedelta(seconds=120)

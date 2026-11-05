@@ -48,7 +48,7 @@ class ProcessRecord:
 
 
 def marker_for(tunnel_id: str) -> str:
-    return f"WIKITUNNEL_PROFILE={tunnel_id}"
+    return f"AUTOSSH_DESK_PROFILE={tunnel_id}"
 
 
 def build_autossh_args(tunnel: Tunnel, autossh_path: str) -> list[str]:
@@ -186,8 +186,12 @@ def find_ssh_pid(record: ProcessRecord) -> int | None:
 
 
 def find_profile_processes(tunnel_id: str) -> list[dict[str, Any]]:
-    marker = marker_for(tunnel_id)
-    return [row for row in process_table() if marker in row["command"] and "autossh" in row["command"]]
+    markers = (marker_for(tunnel_id), f"WIKITUNNEL_PROFILE={tunnel_id}")
+    return [
+        row
+        for row in process_table()
+        if any(marker in row["command"] for marker in markers) and "autossh" in row["command"]
+    ]
 
 
 def process_group_members(record: ProcessRecord) -> list[dict[str, Any]]:

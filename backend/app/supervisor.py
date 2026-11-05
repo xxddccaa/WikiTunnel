@@ -285,7 +285,7 @@ class TunnelSupervisor:
                 self._process_fields(runtime, record)
                 return StartResponse(
                     started=False,
-                    message="该隧道已由 WikiTunnel 管理并正在运行",
+                    message="该隧道已由 AutoSSH Desk 管理并正在运行",
                     runtime=runtime.model_copy(deep=True),
                 )
             if record is not None:
@@ -450,7 +450,7 @@ class TunnelSupervisor:
         descriptor = open_log(log_path)
         os.write(
             descriptor,
-            f"\n--- WikiTunnel autossh session {now_iso()} ---\n".encode("utf-8"),
+            f"\n--- AutoSSH Desk autossh session {now_iso()} ---\n".encode("utf-8"),
         )
         os.fsync(descriptor)
         log_offset = log_path.stat().st_size
@@ -682,7 +682,7 @@ class TunnelSupervisor:
             record = self._records.get(tunnel_id)
             self._stopping.add(tunnel_id)
             if record is not None:
-                self._transition(runtime, "stopping", activity="正在停止 WikiTunnel 管理的进程")
+                self._transition(runtime, "stopping", activity="正在停止 AutoSSH Desk 管理的进程")
                 ok, message = await self._terminate_record(tunnel_id, record)
                 self._active.discard(tunnel_id)
                 runtime.next_retry_at = None
@@ -820,7 +820,7 @@ class TunnelSupervisor:
         tunnel = self._get_tunnel(tunnel_id)
         record = self._records.get(tunnel_id)
         if record is not None and verify_record(record):
-            raise ConflictError("WikiTunnel 管理的 autossh 仍在运行，请先停止后再检查远端残留")
+            raise ConflictError("AutoSSH Desk 管理的 autossh 仍在运行，请先停止后再检查远端残留")
         return await self.conflicts.preview(tunnel)
 
     async def clean_conflict(
@@ -829,7 +829,7 @@ class TunnelSupervisor:
         tunnel = self._get_tunnel(tunnel_id)
         record = self._records.get(tunnel_id)
         if record is not None and verify_record(record):
-            raise ConflictError("WikiTunnel 管理的 autossh 仍在运行，不能清理远端会话")
+            raise ConflictError("AutoSSH Desk 管理的 autossh 仍在运行，不能清理远端会话")
         listener, message = await self.conflicts.clean(
             tunnel, request.fingerprint, request.confirm
         )

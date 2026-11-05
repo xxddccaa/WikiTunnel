@@ -319,7 +319,7 @@ export function TunnelFormDialog({ open, tunnel, onOpenChange, onSubmit }: Props
                 checked={form.auto_start}
                 onCheckedChange={(value) => update("auto_start", value)}
                 label="随应用启动"
-                description="打开 WikiTunnel 时立即尝试连接"
+                description="打开 AutoSSH Desk 时立即尝试连接"
               />
             </div>
           </section>

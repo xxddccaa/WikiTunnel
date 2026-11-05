@@ -1,2 +1,2 @@
-"""WikiTunnel backend package."""
+"""AutoSSH Desk backend package."""
 

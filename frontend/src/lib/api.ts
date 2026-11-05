@@ -107,7 +107,7 @@ export interface ConflictPreview {
   expires_at: string;
 }
 
-export interface WikiEvent {
+export interface TunnelEvent {
   type: "snapshot" | "runtime" | "log" | "log_cleared" | "system";
   tunnel_id?: string;
   runtime?: RuntimeView;
@@ -170,7 +170,7 @@ export async function request<T>(path: string, init: RequestInit = {}): Promise<
     headers.set("Content-Type", "application/json");
   }
   if (method !== "GET" && method !== "HEAD") {
-    headers.set("X-WikiTunnel-Token", await sessionToken());
+    headers.set("X-AutoSSH-Desk-Token", await sessionToken());
   }
   const response = await fetch(path, { ...init, headers, cache: "no-store" });
   if (!response.ok) {

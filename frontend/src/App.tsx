@@ -52,7 +52,7 @@ import {
   type TunnelFields,
   type TunnelState,
   type TunnelStatus,
-  type WikiEvent,
+  type TunnelEvent,
 } from "./lib/api";
 import {
   copyText,
@@ -179,7 +179,7 @@ function Sidebar({
           <span className="absolute -right-0.5 -bottom-0.5 h-3 w-3 rounded-full border-2 border-[#17251f] bg-[#74c68b]" />
         </div>
         <div>
-          <div className="text-[17px] font-semibold tracking-[-0.02em]">WikiTunnel</div>
+          <div className="text-[17px] font-semibold tracking-[-0.02em]">AutoSSH Desk</div>
           <div className="mt-0.5 text-[10px] font-medium tracking-[0.14em] text-[#8fa49a] uppercase">
             Reverse tunnel desk
           </div>
@@ -279,7 +279,7 @@ function EmptyState({ onCreate }: { onCreate: () => void }) {
           建立第一条反向隧道
         </h2>
         <p className="mt-2 text-sm leading-6 text-[#728078]">
-          配置 SSH 端点、远端监听端口与目标数据库，WikiTunnel 会负责启动检查和进程管理。
+          配置 SSH 端点、远端监听端口与目标数据库，AutoSSH Desk 会负责启动检查和进程管理。
         </p>
         <button
           type="button"
@@ -297,7 +297,8 @@ export default function App() {
   const queryClient = useQueryClient();
   const now = useClock();
   const [selectedId, setSelectedId] = useState<string | null>(() =>
-    window.localStorage.getItem("wikitunnel.selectedTunnel"),
+    window.localStorage.getItem("autossh-desk.selectedTunnel") ??
+      window.localStorage.getItem("wikitunnel.selectedTunnel"),
   );
   const [toast, setToast] = useState<ToastState | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -307,7 +308,9 @@ export default function App() {
   const [conflictOpen, setConflictOpen] = useState(false);
   const [logsFollow, setLogsFollow] = useState(true);
   const [notificationsEnabled, setNotificationsEnabled] = useState(
-    () => window.localStorage.getItem("wikitunnel.notifications") === "1",
+    () =>
+      (window.localStorage.getItem("autossh-desk.notifications") ??
+        window.localStorage.getItem("wikitunnel.notifications")) === "1",
   );
   const logRef = useRef<HTMLDivElement>(null);
   const previousStates = useRef<Record<string, TunnelState>>({});
@@ -345,13 +348,13 @@ export default function App() {
     if (!selectedId || !statuses.some((item) => item.tunnel.id === selectedId)) {
       const nextId = statuses[0].tunnel.id;
       setSelectedId(nextId);
-      window.localStorage.setItem("wikitunnel.selectedTunnel", nextId);
+      window.localStorage.setItem("autossh-desk.selectedTunnel", nextId);
     }
   }, [selectedId, statuses]);
 
   useEffect(() => {
     window.localStorage.setItem(
-      "wikitunnel.notifications",
+      "autossh-desk.notifications",
       notificationsEnabled ? "1" : "0",
     );
   }, [notificationsEnabled]);
@@ -405,7 +408,7 @@ export default function App() {
   });
 
   const handleEvent = useCallback(
-    (event: WikiEvent) => {
+    (event: TunnelEvent) => {
       if (event.type === "snapshot" && event.statuses) {
         queryClient.setQueryData(["statuses"], event.statuses);
         return;
@@ -491,7 +494,7 @@ export default function App() {
     void runAction("duplicate", async () => {
       const created = await api.duplicate(selected.tunnel.id);
       setSelectedId(created.tunnel.id);
-      window.localStorage.setItem("wikitunnel.selectedTunnel", created.tunnel.id);
+      window.localStorage.setItem("autossh-desk.selectedTunnel", created.tunnel.id);
       return "已复制配置，并分配了新的远端端口";
     });
   };
@@ -505,7 +508,7 @@ export default function App() {
   const copyDiagnostics = () => {
     if (!selected) return;
     const content = [
-      `WikiTunnel diagnostic: ${selected.tunnel.name}`,
+      `AutoSSH Desk diagnostic: ${selected.tunnel.name}`,
       `Generated: ${new Date().toISOString()}`,
       "",
       JSON.stringify({ tunnel: selected.tunnel, runtime: selected.runtime }, null, 2),
@@ -535,7 +538,7 @@ export default function App() {
       const created = await api.create(payload);
       await refresh();
       setSelectedId(created.tunnel.id);
-      window.localStorage.setItem("wikitunnel.selectedTunnel", created.tunnel.id);
+      window.localStorage.setItem("autossh-desk.selectedTunnel", created.tunnel.id);
       notify("隧道已创建", "success");
     }
   };
@@ -578,7 +581,7 @@ export default function App() {
         selectedId={selectedId}
         onSelect={(id) => {
           setSelectedId(id);
-          window.localStorage.setItem("wikitunnel.selectedTunnel", id);
+          window.localStorage.setItem("autossh-desk.selectedTunnel", id);
         }}
         onCreate={openCreate}
         autosshPath={healthQuery.data?.autossh}
@@ -666,7 +669,7 @@ export default function App() {
                     ) : null}
                     {selected.runtime.managed ? (
                       <span className="rounded-full border border-[#d9e2d9] bg-[#f1f5ef] px-2.5 py-1 text-[10px] font-semibold text-[#67766b]">
-                        由 WikiTunnel 管理
+                        由 AutoSSH Desk 管理
                       </span>
                     ) : null}
                   </div>
@@ -915,7 +918,7 @@ export default function App() {
                   <h2 className="text-base font-semibold text-[#203429]">SSH 与认证</h2>
                 </div>
                 <p className="mt-2 text-xs leading-5 text-[#7b8980]">
-                  密码和私钥口令由 macOS Keychain 或 SSH Agent 提供，WikiTunnel 不读取认证内容。
+                  密码和私钥口令由 macOS Keychain 或 SSH Agent 提供，AutoSSH Desk 不读取认证内容。
                 </p>
                 <div className="mt-4 space-y-2.5">
                   <InfoCell label="SSH Profile" value={selected.tunnel.ssh_target} mono />
